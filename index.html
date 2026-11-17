@@ -25,10 +25,9 @@
   #stage svg{position:absolute;inset:0;width:100%;height:100%}
   .track{fill:none;stroke:#111a28}
   .bar{fill:none;stroke-linecap:round;transition:stroke .6s}
+  #stage{contain:strict}
   .bg-glow{position:absolute;inset:0;border-radius:50%;
-    background:radial-gradient(circle at 50% 50%, color-mix(in srgb,var(--accent) 18%,transparent) 0%, transparent 62%);
-    animation:pulse 4s ease-in-out infinite}
-  @keyframes pulse{50%{opacity:.45}}
+    background:radial-gradient(circle at 50% 50%, color-mix(in srgb,var(--accent) 14%,transparent) 0%, transparent 62%)}
   .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
   #single{display:flex;flex-direction:column;align-items:center}
   .label{font-size:calc(var(--size)*.045);letter-spacing:.35em;color:var(--dim);font-weight:600;text-transform:uppercase}
@@ -86,7 +85,6 @@
         <div class="big"><span id="mainVal">--</span><sup id="mainUnit">°C</sup></div>
       </div>
       <div id="dualBox" hidden>
-        <div class="dual-title">TEMPERATURA</div>
         <div class="dual">
           <div><div class="label">CPU</div><div class="mid"><span id="dCpu">--</span><sup>°</sup></div></div>
           <div class="sep"></div>
@@ -234,10 +232,18 @@
   };
   const fmt = v => v == null || isNaN(v) ? "--" : Math.round(v);
 
-  /* ---- state: targets come from CAM (~1/s), current values are animated every frame ---- */
-  const target = {};   // numeric targets
-  const cur = {};      // animated values
+  /* ---- motion: CAM sends data ~1/s. Each new sample starts a constant-speed glide from
+         wherever the value is *right now* to the new value, lasting one update interval
+         (slightly more, so the motion never stops before the next sample arrives).
+         Result: continuous movement, no ease-out "stop & go" every second. ---- */
+  const anim = {};     // key -> {from, to, t0, dur}
+  let period = 1000, lastData = null;
   let view = null;     // non-numeric layout info from last update
+  const valueAt = (a, now) => a.from + (a.to - a.from) * Math.min(1, Math.max(0, (now - a.t0) / a.dur));
+  function setTarget(k, v, now) {
+    const a = anim[k];
+    anim[k] = { from: a ? valueAt(a, now) : v, to: v, t0: now, dur: period * 1.08 };
+  }
 
   function update(d) {
     cfg = load();
@@ -250,9 +256,15 @@
     const ram = d.ram || {};
     const ramPct = ram.totalSize ? (ram.inUse / ram.totalSize) * 100 : null;
 
-    target.ring_cpu    = clamp01((cpu.temperature || 0) / 100);
-    target.ring_gpu    = clamp01((gpu.temperature || 0) / 100);
-    target.ring_liquid = clamp01(((liquid || 20) - 20) / 25);
+    const now = performance.now();
+    if (lastData != null) {
+      const gap = now - lastData;
+      if (gap > 200 && gap < 3000) period += (gap - period) * 0.3;   // learn CAM's update interval
+    }
+    lastData = now;
+    setTarget("ring_cpu",    clamp01((cpu.temperature || 0) / 100), now);
+    setTarget("ring_gpu",    clamp01((gpu.temperature || 0) / 100), now);
+    setTarget("ring_liquid", clamp01(((liquid || 20) - 20) / 25), now);
     ringEls.cpu.bar.style.stroke    = heatColor(cpu.temperature, 40, 90);
     ringEls.gpu.bar.style.stroke    = heatColor(gpu.temperature, 40, 85);
     ringEls.liquid.bar.style.stroke = heatColor(liquid, 28, 40);
@@ -261,7 +273,7 @@
       cpuTemp: toU(cpu.temperature), gpuTemp: toU(gpu.temperature), liquid: toU(liquid),
       cpuLoad: pct(cpu.load), gpuLoad: pct(gpu.load), ram: ramPct,
     };
-    for (const [k, v] of Object.entries(vals)) if (v != null && !isNaN(v)) target[k] = v;
+    for (const [k, v] of Object.entries(vals)) if (v != null && !isNaN(v)) setTarget(k, v, now);
 
     const mains = {
       cpuTemp:{ l:"CPU",      u:"°" + cfg.unit },
@@ -276,12 +288,7 @@
     // secondary values under the main one
     let subs;
     if (dual) {
-      subs = [
-        liquid != null && ["H₂O", "liquid", "°"],
-        ["CPU", "cpuLoad", "%"],
-        ["GPU", "gpuLoad", "%"],
-        ["RAM", "ram", "%"],
-      ];
+      subs = [["LIQUIDO", "liquid", "°"]];
     } else {
       subs = [
         cfg.main !== "gpuTemp" && ["GPU", "gpuTemp", "°"],
@@ -307,45 +314,40 @@
   /* ---- render loop at the Kraken's target FPS ---- */
   const mainValEl = $("mainVal"), dCpuEl = $("dCpu"), dGpuEl = $("dGpu");
   const fpsEl = $("fps");
-  let lastStep = 0, prevStep = performance.now();
+  let lastStep = 0;
   let fpsFrames = 0, fpsT0 = performance.now();
-  const SMOOTH = 6; // higher = snappier (1/s)
+  const cur = (k, now) => anim[k] ? valueAt(anim[k], now) : null;
+  const setText = (el, s) => { if (el.textContent !== s) el.textContent = s; };   // touch DOM only on change
 
   function step(now) {
-    const dt = Math.min(0.25, (now - prevStep) / 1000);
-    prevStep = lastStep = now;
-    const a = 1 - Math.exp(-SMOOTH * dt);
-
-    for (const k in target) {
-      if (cur[k] == null) cur[k] = target[k];
-      else cur[k] += (target[k] - cur[k]) * a;
-    }
+    lastStep = now;
     for (const r of RINGS) {
-      const { bar, C } = ringEls[r.key];
-      const f = cur["ring_" + r.key];
-      if (f != null) bar.style.strokeDashoffset = C * ARC * (1 - f);
+      const f = cur("ring_" + r.key, now);
+      if (f != null) {
+        const { bar, C } = ringEls[r.key];
+        bar.style.strokeDashoffset = (C * ARC * (1 - f)).toFixed(3);
+      }
     }
     if (view) {
-      if (view.dual) { dCpuEl.textContent = fmt(cur.cpuTemp); dGpuEl.textContent = fmt(cur.gpuTemp); }
-      else mainValEl.textContent = fmt(cur[view.mainKey]);
-      view.subs.forEach(([, k, suf], i) => { view.subEls[i].textContent = fmt(cur[k]) + suf; });
+      if (view.dual) { setText(dCpuEl, String(fmt(cur("cpuTemp", now)))); setText(dGpuEl, String(fmt(cur("gpuTemp", now)))); }
+      else setText(mainValEl, String(fmt(cur(view.mainKey, now))));
+      view.subs.forEach(([, k, suf], i) => setText(view.subEls[i], fmt(cur(k, now)) + suf));
     }
 
     fpsFrames++;
     if (now - fpsT0 >= 1000) {
       fpsEl.hidden = cfg.fps !== "1";
-      fpsEl.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsT0))} / ${TARGET_FPS} FPS`;
+      setText(fpsEl, `${Math.round(fpsFrames * 1000 / (now - fpsT0))} / ${TARGET_FPS} FPS`);
       fpsFrames = 0; fpsT0 = now;
     }
   }
 
-  function rafLoop(now) {
-    if (now - lastStep >= FRAME_MS - 1) step(now);
-    requestAnimationFrame(rafLoop);
-  }
+  // Draw on EVERY frame the browser produces — no throttling, so no frame is ever skipped.
+  // Positions are computed from the clock, so motion speed is identical whatever the FPS.
+  function rafLoop(now) { step(now); requestAnimationFrame(rafLoop); }
   requestAnimationFrame(rafLoop);
-  // Fallback in case the off-screen Kraken browser throttles requestAnimationFrame
-  setInterval(() => { const now = performance.now(); if (now - lastStep > FRAME_MS * 2) step(now); }, FRAME_MS);
+  // Safety net only if requestAnimationFrame stops entirely (it never runs alongside rAF).
+  setInterval(() => { const now = performance.now(); if (now - lastStep > 250) step(now); }, FRAME_MS);
 
   // Clock
   const clock = $("clock");
