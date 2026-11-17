@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kraken HUD — NZXT CAM Web Integration</title>
+<style>
+  :root{
+    --accent:#00e5ff;
+    --accent2:#ff2d95;
+    --bg:#05070d;
+    --fg:#e8f6ff;
+    --dim:#4a5a70;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;height:100%;background:var(--bg);color:var(--fg);
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;overflow:hidden}
+
+  /* ---------- KRAKEN VIEW ---------- */
+  #kraken{position:fixed;inset:0;display:none;align-items:center;justify-content:center}
+  body.is-kraken #kraken{display:flex}
+  #stage{position:relative;width:var(--size);height:var(--size)}
+  #stage.round{border-radius:50%;overflow:hidden}
+  #stage svg{position:absolute;inset:0;width:100%;height:100%}
+  .track{fill:none;stroke:#111a28}
+  .bar{fill:none;stroke-linecap:round;transition:stroke-dashoffset .9s cubic-bezier(.2,.8,.2,1),stroke .6s}
+  .bg-glow{position:absolute;inset:0;border-radius:50%;
+    background:radial-gradient(circle at 50% 50%, color-mix(in srgb,var(--accent) 18%,transparent) 0%, transparent 62%);
+    animation:pulse 4s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.45}}
+  .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+  .label{font-size:calc(var(--size)*.045);letter-spacing:.35em;color:var(--dim);font-weight:600;text-transform:uppercase}
+  .big{font-size:calc(var(--size)*.26);font-weight:200;line-height:1;font-variant-numeric:tabular-nums;
+    text-shadow:0 0 calc(var(--size)*.04) color-mix(in srgb,var(--accent) 60%,transparent)}
+  .big sup{font-size:.32em;vertical-align:super;font-weight:300;color:var(--accent)}
+  .sub{margin-top:calc(var(--size)*.03);display:flex;gap:calc(var(--size)*.07);font-size:calc(var(--size)*.05);font-variant-numeric:tabular-nums}
+  .sub div{display:flex;flex-direction:column;align-items:center}
+  .sub small{font-size:.6em;color:var(--dim);letter-spacing:.2em}
+  .clock{position:absolute;bottom:13%;left:0;right:0;text-align:center;font-size:calc(var(--size)*.05);color:var(--dim);letter-spacing:.15em;font-variant-numeric:tabular-nums}
+  .demo{position:absolute;top:21%;left:0;right:0;text-align:center;font-size:calc(var(--size)*.032);color:var(--accent2);letter-spacing:.3em}
+
+  /* ---------- CONFIG VIEW ---------- */
+  #config{display:none;height:100%;overflow:auto;padding:32px;background:#0a0e17}
+  body:not(.is-kraken) #config{display:block}
+  .wrap{max-width:980px;margin:0 auto;display:grid;grid-template-columns:1fr 360px;gap:32px;align-items:start}
+  h1{font-size:22px;font-weight:600;margin-bottom:4px}
+  h1 span{color:var(--accent)}
+  p.hint{color:#8597ad;font-size:13px;margin-bottom:24px}
+  .card{background:#111724;border:1px solid #1c2537;border-radius:14px;padding:20px;margin-bottom:16px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.15em;color:#8597ad;margin-bottom:14px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:10px 0;font-size:14px}
+  select,input[type=color]{background:#0a0e17;color:var(--fg);border:1px solid #2a3550;border-radius:8px;padding:6px 10px;font:inherit}
+  input[type=color]{width:46px;height:32px;padding:2px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{width:28px;height:28px;border-radius:50%;cursor:pointer;border:2px solid transparent}
+  .chip.on{border-color:#fff}
+  .preview{position:sticky;top:0}
+  .preview iframe{width:320px;height:320px;border:none;border-radius:50%;background:#000;
+    box-shadow:0 0 0 10px #1a1f2b,0 0 0 12px #2a3142,0 20px 60px #000}
+  .preview p{text-align:center;color:#8597ad;font-size:12px;margin-top:22px}
+  @media (max-width:760px){.wrap{grid-template-columns:1fr}.preview{order:-1;display:flex;flex-direction:column;align-items:center}}
+</style>
+</head>
+<body>
+
+<!-- ================= KRAKEN DISPLAY ================= -->
+<div id="kraken">
+  <div id="stage">
+    <div class="bg-glow"></div>
+    <svg viewBox="0 0 200 200" id="rings"></svg>
+    <div class="demo" id="demoTag" hidden>DEMO</div>
+    <div class="center">
+      <div class="label" id="mainLabel">CPU</div>
+      <div class="big"><span id="mainVal">--</span><sup id="mainUnit">°C</sup></div>
+      <div class="sub" id="subs"></div>
+    </div>
+    <div class="clock" id="clock"></div>
+  </div>
+</div>
+
+<!-- ================= CONFIGURATION (CAM settings panel) ================= -->
+<div id="config">
+  <div class="wrap">
+    <div>
+      <h1>Kraken <span>HUD</span></h1>
+      <p class="hint">Configura qui la visualizzazione: le modifiche vengono salvate e mostrate subito sul display del Kraken.</p>
+
+      <div class="card">
+        <h2>Valore centrale</h2>
+        <div class="row">Metrica principale
+          <select id="cfgMain">
+            <option value="cpuTemp">Temperatura CPU</option>
+            <option value="gpuTemp">Temperatura GPU</option>
+            <option value="liquid">Temperatura liquido</option>
+            <option value="cpuLoad">Carico CPU</option>
+            <option value="gpuLoad">Carico GPU</option>
+          </select>
+        </div>
+        <div class="row">Unità temperatura
+          <select id="cfgUnit"><option value="C">Celsius</option><option value="F">Fahrenheit</option></select>
+        </div>
+        <div class="row">Mostra orologio
+          <select id="cfgClock"><option value="1">Sì</option><option value="0">No</option></select>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Colori</h2>
+        <div class="row">Preset <div class="chips" id="presets"></div></div>
+        <div class="row">Accento <input type="color" id="cfgAccent"></div>
+        <div class="row">Secondario <input type="color" id="cfgAccent2"></div>
+        <div class="row">Colore dinamico in base alla temperatura
+          <select id="cfgHeat"><option value="1">Sì</option><option value="0">No</option></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="preview">
+      <iframe id="previewFrame" title="Anteprima"></iframe>
+      <p>Anteprima con dati simulati</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const isKraken = params.get("kraken") === "1";
+  const isPreview = params.get("preview") === "1";
+  const KEY = "kraken-hud-config";
+  const DEFAULTS = { main:"cpuTemp", unit:"C", clock:"1", accent:"#00e5ff", accent2:"#ff2d95", heat:"1" };
+
+  const load = () => { try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || "{}") }; } catch { return { ...DEFAULTS }; } };
+  const save = c => { try { localStorage.setItem(KEY, JSON.stringify(c)); } catch {} };
+
+  /* ================= CONFIG PAGE ================= */
+  if (!isKraken) {
+    const cfg = load();
+    const $ = id => document.getElementById(id);
+    const fields = { cfgMain:"main", cfgUnit:"unit", cfgClock:"clock", cfgAccent:"accent", cfgAccent2:"accent2", cfgHeat:"heat" };
+    const presets = [["#00e5ff","#ff2d95"],["#7cff4f","#00b3ff"],["#ff7a00","#ffd400"],["#b06bff","#ff4f9a"],["#ffffff","#7a8ba3"],["#ff2b2b","#ff9e2b"]];
+    const frame = $("previewFrame");
+    const refresh = () => { save(cfg); document.documentElement.style.setProperty("--accent", cfg.accent);
+      frame.src = location.pathname + "?kraken=1&preview=1&t=" + Date.now(); };
+
+    for (const [id, k] of Object.entries(fields)) {
+      $(id).value = cfg[k];
+      $(id).addEventListener("input", e => { cfg[k] = e.target.value; refresh(); });
+    }
+    const box = $("presets");
+    presets.forEach(([a, b]) => {
+      const c = document.createElement("div");
+      c.className = "chip"; c.style.background = `linear-gradient(135deg,${a} 50%,${b} 50%)`;
+      c.onclick = () => { cfg.accent = a; cfg.accent2 = b; $("cfgAccent").value = a; $("cfgAccent2").value = b; refresh(); };
+      box.appendChild(c);
+    });
+    refresh();
+    return;
+  }
+
+  /* ================= KRAKEN DISPLAY ================= */
+  document.body.classList.add("is-kraken");
+  let cfg = load();
+  const root = document.documentElement;
+  const v1 = (window.nzxt && window.nzxt.v1) || {};
+  const W = v1.width || window.innerWidth, H = v1.height || window.innerHeight;
+  const size = Math.min(W, H);
+  root.style.setProperty("--size", size + "px");
+  const stage = document.getElementById("stage");
+  if ((v1.shape || "circle") === "circle") stage.classList.add("round");
+
+  // Rings: outer = CPU, middle = GPU, inner = liquid
+  const RINGS = [
+    { key:"cpu",    r:92, w:6 },
+    { key:"gpu",    r:82, w:4 },
+    { key:"liquid", r:74, w:2.5 },
+  ];
+  const svg = document.getElementById("rings");
+  const ns = "http://www.w3.org/2000/svg";
+  const ARC = 0.75; // 270° gauge
+  const ringEls = {};
+  RINGS.forEach(R => {
+    const C = 2 * Math.PI * R.r;
+    const mk = cls => { const c = document.createElementNS(ns, "circle");
+      c.setAttribute("cx", 100); c.setAttribute("cy", 100); c.setAttribute("r", R.r);
+      c.setAttribute("class", cls); c.setAttribute("stroke-width", R.w);
+      c.setAttribute("transform", "rotate(135 100 100)");
+      c.style.strokeDasharray = `${C * ARC} ${C}`; svg.appendChild(c); return c; };
+    mk("track");
+    const bar = mk("bar");
+    bar.style.strokeDashoffset = C * ARC;
+    ringEls[R.key] = { bar, C };
+  });
+
+  const setRing = (key, frac, color) => {
+    const { bar, C } = ringEls[key];
+    frac = Math.max(0, Math.min(1, frac || 0));
+    bar.style.strokeDashoffset = C * ARC * (1 - frac);
+    bar.style.stroke = color;
+  };
+
+  // Helpers
+  const pct = v => v == null ? null : (v <= 1 ? v * 100 : v);          // load may be 0–1 or 0–100
+  const toU = c => c == null ? null : (cfg.unit === "F" ? c * 9 / 5 + 32 : c);
+  const heatColor = (t, lo, hi) => {                                   // accent → accent2 → red
+    if (cfg.heat !== "1" || t == null) return cfg.accent;
+    const f = Math.max(0, Math.min(1, (t - lo) / (hi - lo)));
+    return f < .6 ? cfg.accent : f < .85 ? cfg.accent2 : "#ff3b3b";
+  };
+  const fmt = v => v == null || isNaN(v) ? "--" : Math.round(v);
+
+  function render(d) {
+    cfg = load();
+    root.style.setProperty("--accent", cfg.accent);
+    root.style.setProperty("--accent2", cfg.accent2);
+
+    const cpu = (d.cpus || [])[0] || {};
+    const gpu = (d.gpus || []).find(g => g.temperature != null) || (d.gpus || [])[0] || {};
+    const liquid = d.kraken && d.kraken.liquidTemperature;
+    const ram = d.ram || {};
+    const ramPct = ram.totalSize ? (ram.inUse / ram.totalSize) * 100 : null;
+
+    setRing("cpu", (cpu.temperature || 0) / 100, heatColor(cpu.temperature, 40, 90));
+    setRing("gpu", (gpu.temperature || 0) / 100, heatColor(gpu.temperature, 40, 85));
+    setRing("liquid", ((liquid || 20) - 20) / 25, heatColor(liquid, 28, 40));
+
+    const mains = {
+      cpuTemp:{ l:"CPU",    v:toU(cpu.temperature), u:"°" + cfg.unit },
+      gpuTemp:{ l:"GPU",    v:toU(gpu.temperature), u:"°" + cfg.unit },
+      liquid: { l:"LIQUID", v:toU(liquid),          u:"°" + cfg.unit },
+      cpuLoad:{ l:"CPU LOAD", v:pct(cpu.load),      u:"%" },
+      gpuLoad:{ l:"GPU LOAD", v:pct(gpu.load),      u:"%" },
+    };
+    const m = mains[cfg.main] || mains.cpuTemp;
+    document.getElementById("mainLabel").textContent = m.l;
+    document.getElementById("mainVal").textContent = fmt(m.v);
+    document.getElementById("mainUnit").textContent = m.u;
+
+    const subs = [
+      cfg.main !== "gpuTemp" && ["GPU", fmt(toU(gpu.temperature)) + "°"],
+      cfg.main !== "cpuTemp" && ["CPU", fmt(toU(cpu.temperature)) + "°"],
+      cfg.main !== "liquid" && liquid != null && ["H₂O", fmt(toU(liquid)) + "°"],
+      ["RAM", fmt(ramPct) + "%"],
+    ].filter(Boolean).slice(0, 3);
+    document.getElementById("subs").innerHTML =
+      subs.map(([k, v]) => `<div><small>${k}</small>${v}</div>`).join("");
+  }
+
+  // Clock
+  const clock = document.getElementById("clock");
+  const tick = () => { clock.style.display = load().clock === "1" ? "" : "none";
+    clock.textContent = new Date().toLocaleTimeString("it-IT", { hour:"2-digit", minute:"2-digit" }); };
+  tick(); setInterval(tick, 1000);
+
+  // Real data from NZXT CAM (called ~every second)
+  let gotReal = false;
+  window.nzxt = { ...(window.nzxt || {}), v1: { ...v1, onMonitoringDataUpdate: data => { gotReal = true; render(data); } } };
+
+  // Demo data when opened outside CAM (or in config preview)
+  let t = 0;
+  const fake = () => {
+    t += 1;
+    const w = (b, a, s) => b + a * Math.sin(t / s) + Math.random() * 2;
+    return {
+      cpus:[{ temperature:w(58, 14, 6), load:Math.min(1, Math.max(0, w(.4, .3, 5) / 1)) }],
+      gpus:[{ temperature:w(55, 12, 8), load:Math.min(1, Math.max(0, w(.5, .35, 7) / 1)) }],
+      ram:{ inUse:w(14000, 2500, 9), totalSize:32768 },
+      kraken:{ liquidTemperature:w(32, 3, 15) },
+    };
+  };
+  setTimeout(() => {
+    if (gotReal && !isPreview) return;
+    document.getElementById("demoTag").hidden = false;
+    render(fake());
+    setInterval(() => { if (!gotReal || isPreview) render(fake()); }, 1000);
+  }, isPreview ? 0 : 2500);
+
+  // Config changes from CAM's settings browser (shared localStorage)
+  window.addEventListener("storage", e => { if (e.key === KEY) cfg = load(); });
+})();
+</script>
+</body>
+</html>
