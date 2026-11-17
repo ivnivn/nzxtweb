@@ -13,6 +13,7 @@
     --dim:#4a5a70;
   }
   *{box-sizing:border-box;margin:0;padding:0}
+  [hidden]{display:none!important}
   html,body{width:100%;height:100%;background:var(--bg);color:var(--fg);
     font-family:"Segoe UI",system-ui,-apple-system,sans-serif;overflow:hidden}
 
@@ -23,20 +24,31 @@
   #stage.round{border-radius:50%;overflow:hidden}
   #stage svg{position:absolute;inset:0;width:100%;height:100%}
   .track{fill:none;stroke:#111a28}
-  .bar{fill:none;stroke-linecap:round;transition:stroke-dashoffset .9s cubic-bezier(.2,.8,.2,1),stroke .6s}
+  .bar{fill:none;stroke-linecap:round;transition:stroke .6s}
   .bg-glow{position:absolute;inset:0;border-radius:50%;
     background:radial-gradient(circle at 50% 50%, color-mix(in srgb,var(--accent) 18%,transparent) 0%, transparent 62%);
     animation:pulse 4s ease-in-out infinite}
   @keyframes pulse{50%{opacity:.45}}
   .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+  #single{display:flex;flex-direction:column;align-items:center}
   .label{font-size:calc(var(--size)*.045);letter-spacing:.35em;color:var(--dim);font-weight:600;text-transform:uppercase}
   .big{font-size:calc(var(--size)*.26);font-weight:200;line-height:1;font-variant-numeric:tabular-nums;
     text-shadow:0 0 calc(var(--size)*.04) color-mix(in srgb,var(--accent) 60%,transparent)}
-  .big sup{font-size:.32em;vertical-align:super;font-weight:300;color:var(--accent)}
+  .big sup,.mid sup{font-size:.32em;vertical-align:super;font-weight:300;color:var(--accent)}
+
+  /* dual CPU/GPU */
+  .dual-title{font-size:calc(var(--size)*.036);letter-spacing:.3em;color:var(--dim);font-weight:600;margin-bottom:calc(var(--size)*.02)}
+  .dual{display:flex;align-items:center;gap:calc(var(--size)*.045)}
+  .dual > div:not(.sep){display:flex;flex-direction:column;align-items:center;min-width:calc(var(--size)*.25)}
+  .mid{font-size:calc(var(--size)*.17);font-weight:200;line-height:1;font-variant-numeric:tabular-nums;
+    text-shadow:0 0 calc(var(--size)*.03) color-mix(in srgb,var(--accent) 60%,transparent)}
+  .sep{width:2px;height:calc(var(--size)*.17);background:linear-gradient(transparent,var(--dim),transparent)}
+
   .sub{margin-top:calc(var(--size)*.03);display:flex;gap:calc(var(--size)*.07);font-size:calc(var(--size)*.05);font-variant-numeric:tabular-nums}
   .sub div{display:flex;flex-direction:column;align-items:center}
   .sub small{font-size:.6em;color:var(--dim);letter-spacing:.2em}
   .clock{position:absolute;bottom:13%;left:0;right:0;text-align:center;font-size:calc(var(--size)*.05);color:var(--dim);letter-spacing:.15em;font-variant-numeric:tabular-nums}
+  .fps{position:absolute;bottom:8%;left:0;right:0;text-align:center;font-size:calc(var(--size)*.03);color:var(--accent2);letter-spacing:.2em;font-variant-numeric:tabular-nums}
   .demo{position:absolute;top:21%;left:0;right:0;text-align:center;font-size:calc(var(--size)*.032);color:var(--accent2);letter-spacing:.3em}
 
   /* ---------- CONFIG VIEW ---------- */
@@ -53,7 +65,6 @@
   input[type=color]{width:46px;height:32px;padding:2px}
   .chips{display:flex;gap:8px;flex-wrap:wrap}
   .chip{width:28px;height:28px;border-radius:50%;cursor:pointer;border:2px solid transparent}
-  .chip.on{border-color:#fff}
   .preview{position:sticky;top:0}
   .preview iframe{width:320px;height:320px;border:none;border-radius:50%;background:#000;
     box-shadow:0 0 0 10px #1a1f2b,0 0 0 12px #2a3142,0 20px 60px #000}
@@ -70,11 +81,22 @@
     <svg viewBox="0 0 200 200" id="rings"></svg>
     <div class="demo" id="demoTag" hidden>DEMO</div>
     <div class="center">
-      <div class="label" id="mainLabel">CPU</div>
-      <div class="big"><span id="mainVal">--</span><sup id="mainUnit">°C</sup></div>
+      <div id="single">
+        <div class="label" id="mainLabel">CPU</div>
+        <div class="big"><span id="mainVal">--</span><sup id="mainUnit">°C</sup></div>
+      </div>
+      <div id="dualBox" hidden>
+        <div class="dual-title">TEMPERATURA</div>
+        <div class="dual">
+          <div><div class="label">CPU</div><div class="mid"><span id="dCpu">--</span><sup>°</sup></div></div>
+          <div class="sep"></div>
+          <div><div class="label">GPU</div><div class="mid"><span id="dGpu">--</span><sup>°</sup></div></div>
+        </div>
+      </div>
       <div class="sub" id="subs"></div>
     </div>
     <div class="clock" id="clock"></div>
+    <div class="fps" id="fps" hidden></div>
   </div>
 </div>
 
@@ -89,6 +111,7 @@
         <h2>Valore centrale</h2>
         <div class="row">Metrica principale
           <select id="cfgMain">
+            <option value="dual">Temperatura CPU/GPU</option>
             <option value="cpuTemp">Temperatura CPU</option>
             <option value="gpuTemp">Temperatura GPU</option>
             <option value="liquid">Temperatura liquido</option>
@@ -101,6 +124,9 @@
         </div>
         <div class="row">Mostra orologio
           <select id="cfgClock"><option value="1">Sì</option><option value="0">No</option></select>
+        </div>
+        <div class="row">Mostra contatore FPS
+          <select id="cfgFps"><option value="0">No</option><option value="1">Sì</option></select>
         </div>
       </div>
 
@@ -128,7 +154,7 @@
   const isKraken = params.get("kraken") === "1";
   const isPreview = params.get("preview") === "1";
   const KEY = "kraken-hud-config";
-  const DEFAULTS = { main:"cpuTemp", unit:"C", clock:"1", accent:"#00e5ff", accent2:"#ff2d95", heat:"1" };
+  const DEFAULTS = { main:"cpuTemp", unit:"C", clock:"1", fps:"0", accent:"#00e5ff", accent2:"#ff2d95", heat:"1" };
 
   const load = () => { try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || "{}") }; } catch { return { ...DEFAULTS }; } };
   const save = c => { try { localStorage.setItem(KEY, JSON.stringify(c)); } catch {} };
@@ -137,7 +163,7 @@
   if (!isKraken) {
     const cfg = load();
     const $ = id => document.getElementById(id);
-    const fields = { cfgMain:"main", cfgUnit:"unit", cfgClock:"clock", cfgAccent:"accent", cfgAccent2:"accent2", cfgHeat:"heat" };
+    const fields = { cfgMain:"main", cfgUnit:"unit", cfgClock:"clock", cfgFps:"fps", cfgAccent:"accent", cfgAccent2:"accent2", cfgHeat:"heat" };
     const presets = [["#00e5ff","#ff2d95"],["#7cff4f","#00b3ff"],["#ff7a00","#ffd400"],["#b06bff","#ff4f9a"],["#ffffff","#7a8ba3"],["#ff2b2b","#ff9e2b"]];
     const frame = $("previewFrame");
     const refresh = () => { save(cfg); document.documentElement.style.setProperty("--accent", cfg.accent);
@@ -162,12 +188,17 @@
   document.body.classList.add("is-kraken");
   let cfg = load();
   const root = document.documentElement;
+  const $ = id => document.getElementById(id);
   const v1 = (window.nzxt && window.nzxt.v1) || {};
   const W = v1.width || window.innerWidth, H = v1.height || window.innerHeight;
   const size = Math.min(W, H);
   root.style.setProperty("--size", size + "px");
-  const stage = document.getElementById("stage");
+  const stage = $("stage");
   if ((v1.shape || "circle") === "circle") stage.classList.add("round");
+
+  // Frame rate: use the target FPS CAM provides for this Kraken; fallback 60.
+  const TARGET_FPS = Math.max(1, Number(v1.targetFps) || 60);
+  const FRAME_MS = 1000 / TARGET_FPS;
 
   // Rings: outer = CPU, middle = GPU, inner = liquid
   const RINGS = [
@@ -175,7 +206,7 @@
     { key:"gpu",    r:82, w:4 },
     { key:"liquid", r:74, w:2.5 },
   ];
-  const svg = document.getElementById("rings");
+  const svg = $("rings");
   const ns = "http://www.w3.org/2000/svg";
   const ARC = 0.75; // 270° gauge
   const ringEls = {};
@@ -192,24 +223,23 @@
     ringEls[R.key] = { bar, C };
   });
 
-  const setRing = (key, frac, color) => {
-    const { bar, C } = ringEls[key];
-    frac = Math.max(0, Math.min(1, frac || 0));
-    bar.style.strokeDashoffset = C * ARC * (1 - frac);
-    bar.style.stroke = color;
-  };
-
   // Helpers
   const pct = v => v == null ? null : (v <= 1 ? v * 100 : v);          // load may be 0–1 or 0–100
   const toU = c => c == null ? null : (cfg.unit === "F" ? c * 9 / 5 + 32 : c);
+  const clamp01 = f => Math.max(0, Math.min(1, f || 0));
   const heatColor = (t, lo, hi) => {                                   // accent → accent2 → red
     if (cfg.heat !== "1" || t == null) return cfg.accent;
-    const f = Math.max(0, Math.min(1, (t - lo) / (hi - lo)));
+    const f = clamp01((t - lo) / (hi - lo));
     return f < .6 ? cfg.accent : f < .85 ? cfg.accent2 : "#ff3b3b";
   };
   const fmt = v => v == null || isNaN(v) ? "--" : Math.round(v);
 
-  function render(d) {
+  /* ---- state: targets come from CAM (~1/s), current values are animated every frame ---- */
+  const target = {};   // numeric targets
+  const cur = {};      // animated values
+  let view = null;     // non-numeric layout info from last update
+
+  function update(d) {
     cfg = load();
     root.style.setProperty("--accent", cfg.accent);
     root.style.setProperty("--accent2", cfg.accent2);
@@ -220,41 +250,112 @@
     const ram = d.ram || {};
     const ramPct = ram.totalSize ? (ram.inUse / ram.totalSize) * 100 : null;
 
-    setRing("cpu", (cpu.temperature || 0) / 100, heatColor(cpu.temperature, 40, 90));
-    setRing("gpu", (gpu.temperature || 0) / 100, heatColor(gpu.temperature, 40, 85));
-    setRing("liquid", ((liquid || 20) - 20) / 25, heatColor(liquid, 28, 40));
+    target.ring_cpu    = clamp01((cpu.temperature || 0) / 100);
+    target.ring_gpu    = clamp01((gpu.temperature || 0) / 100);
+    target.ring_liquid = clamp01(((liquid || 20) - 20) / 25);
+    ringEls.cpu.bar.style.stroke    = heatColor(cpu.temperature, 40, 90);
+    ringEls.gpu.bar.style.stroke    = heatColor(gpu.temperature, 40, 85);
+    ringEls.liquid.bar.style.stroke = heatColor(liquid, 28, 40);
+
+    const vals = {
+      cpuTemp: toU(cpu.temperature), gpuTemp: toU(gpu.temperature), liquid: toU(liquid),
+      cpuLoad: pct(cpu.load), gpuLoad: pct(gpu.load), ram: ramPct,
+    };
+    for (const [k, v] of Object.entries(vals)) if (v != null && !isNaN(v)) target[k] = v;
 
     const mains = {
-      cpuTemp:{ l:"CPU",    v:toU(cpu.temperature), u:"°" + cfg.unit },
-      gpuTemp:{ l:"GPU",    v:toU(gpu.temperature), u:"°" + cfg.unit },
-      liquid: { l:"LIQUID", v:toU(liquid),          u:"°" + cfg.unit },
-      cpuLoad:{ l:"CPU LOAD", v:pct(cpu.load),      u:"%" },
-      gpuLoad:{ l:"GPU LOAD", v:pct(gpu.load),      u:"%" },
+      cpuTemp:{ l:"CPU",      u:"°" + cfg.unit },
+      gpuTemp:{ l:"GPU",      u:"°" + cfg.unit },
+      liquid: { l:"LIQUID",   u:"°" + cfg.unit },
+      cpuLoad:{ l:"CPU LOAD", u:"%" },
+      gpuLoad:{ l:"GPU LOAD", u:"%" },
     };
+    const dual = cfg.main === "dual";
     const m = mains[cfg.main] || mains.cpuTemp;
-    document.getElementById("mainLabel").textContent = m.l;
-    document.getElementById("mainVal").textContent = fmt(m.v);
-    document.getElementById("mainUnit").textContent = m.u;
 
-    const subs = [
-      cfg.main !== "gpuTemp" && ["GPU", fmt(toU(gpu.temperature)) + "°"],
-      cfg.main !== "cpuTemp" && ["CPU", fmt(toU(cpu.temperature)) + "°"],
-      cfg.main !== "liquid" && liquid != null && ["H₂O", fmt(toU(liquid)) + "°"],
-      ["RAM", fmt(ramPct) + "%"],
-    ].filter(Boolean).slice(0, 3);
-    document.getElementById("subs").innerHTML =
-      subs.map(([k, v]) => `<div><small>${k}</small>${v}</div>`).join("");
+    // secondary values under the main one
+    let subs;
+    if (dual) {
+      subs = [
+        liquid != null && ["H₂O", "liquid", "°"],
+        ["CPU", "cpuLoad", "%"],
+        ["GPU", "gpuLoad", "%"],
+        ["RAM", "ram", "%"],
+      ];
+    } else {
+      subs = [
+        cfg.main !== "gpuTemp" && ["GPU", "gpuTemp", "°"],
+        cfg.main !== "cpuTemp" && ["CPU", "cpuTemp", "°"],
+        cfg.main !== "liquid" && liquid != null && ["H₂O", "liquid", "°"],
+        ["RAM", "ram", "%"],
+      ];
+    }
+    subs = subs.filter(Boolean).slice(0, 3);
+
+    const key = (dual ? "dual" : cfg.main) + "|" + subs.map(s => s[0]).join(",") + "|" + cfg.unit;
+    if (!view || view.key !== key) {
+      $("single").hidden = dual;
+      $("dualBox").hidden = !dual;
+      $("mainLabel").textContent = m.l;
+      $("mainUnit").textContent = m.u;
+      $("subs").innerHTML = subs.map(([lbl], i) => `<div><small>${lbl}</small><span id="sub${i}">--</span></div>`).join("");
+      view = { key, dual, mainKey: (mains[cfg.main] ? cfg.main : "cpuTemp"), subs,
+               subEls: subs.map((_, i) => $("sub" + i)) };
+    }
   }
 
+  /* ---- render loop at the Kraken's target FPS ---- */
+  const mainValEl = $("mainVal"), dCpuEl = $("dCpu"), dGpuEl = $("dGpu");
+  const fpsEl = $("fps");
+  let lastStep = 0, prevStep = performance.now();
+  let fpsFrames = 0, fpsT0 = performance.now();
+  const SMOOTH = 6; // higher = snappier (1/s)
+
+  function step(now) {
+    const dt = Math.min(0.25, (now - prevStep) / 1000);
+    prevStep = lastStep = now;
+    const a = 1 - Math.exp(-SMOOTH * dt);
+
+    for (const k in target) {
+      if (cur[k] == null) cur[k] = target[k];
+      else cur[k] += (target[k] - cur[k]) * a;
+    }
+    for (const r of RINGS) {
+      const { bar, C } = ringEls[r.key];
+      const f = cur["ring_" + r.key];
+      if (f != null) bar.style.strokeDashoffset = C * ARC * (1 - f);
+    }
+    if (view) {
+      if (view.dual) { dCpuEl.textContent = fmt(cur.cpuTemp); dGpuEl.textContent = fmt(cur.gpuTemp); }
+      else mainValEl.textContent = fmt(cur[view.mainKey]);
+      view.subs.forEach(([, k, suf], i) => { view.subEls[i].textContent = fmt(cur[k]) + suf; });
+    }
+
+    fpsFrames++;
+    if (now - fpsT0 >= 1000) {
+      fpsEl.hidden = cfg.fps !== "1";
+      fpsEl.textContent = `${Math.round(fpsFrames * 1000 / (now - fpsT0))} / ${TARGET_FPS} FPS`;
+      fpsFrames = 0; fpsT0 = now;
+    }
+  }
+
+  function rafLoop(now) {
+    if (now - lastStep >= FRAME_MS - 1) step(now);
+    requestAnimationFrame(rafLoop);
+  }
+  requestAnimationFrame(rafLoop);
+  // Fallback in case the off-screen Kraken browser throttles requestAnimationFrame
+  setInterval(() => { const now = performance.now(); if (now - lastStep > FRAME_MS * 2) step(now); }, FRAME_MS);
+
   // Clock
-  const clock = document.getElementById("clock");
+  const clock = $("clock");
   const tick = () => { clock.style.display = load().clock === "1" ? "" : "none";
     clock.textContent = new Date().toLocaleTimeString("it-IT", { hour:"2-digit", minute:"2-digit" }); };
   tick(); setInterval(tick, 1000);
 
   // Real data from NZXT CAM (called ~every second)
   let gotReal = false;
-  window.nzxt = { ...(window.nzxt || {}), v1: { ...v1, onMonitoringDataUpdate: data => { gotReal = true; render(data); } } };
+  window.nzxt = { ...(window.nzxt || {}), v1: { ...v1, onMonitoringDataUpdate: data => { gotReal = true; update(data); } } };
 
   // Demo data when opened outside CAM (or in config preview)
   let t = 0;
@@ -262,21 +363,20 @@
     t += 1;
     const w = (b, a, s) => b + a * Math.sin(t / s) + Math.random() * 2;
     return {
-      cpus:[{ temperature:w(58, 14, 6), load:Math.min(1, Math.max(0, w(.4, .3, 5) / 1)) }],
-      gpus:[{ temperature:w(55, 12, 8), load:Math.min(1, Math.max(0, w(.5, .35, 7) / 1)) }],
+      cpus:[{ temperature:w(58, 14, 6), load:clamp01(w(40, 30, 5) / 100) }],
+      gpus:[{ temperature:w(55, 12, 8), load:clamp01(w(50, 35, 7) / 100) }],
       ram:{ inUse:w(14000, 2500, 9), totalSize:32768 },
       kraken:{ liquidTemperature:w(32, 3, 15) },
     };
   };
   setTimeout(() => {
     if (gotReal && !isPreview) return;
-    document.getElementById("demoTag").hidden = false;
-    render(fake());
-    setInterval(() => { if (!gotReal || isPreview) render(fake()); }, 1000);
+    $("demoTag").hidden = false;
+    update(fake());
+    setInterval(() => { if (!gotReal || isPreview) update(fake()); }, 1000);
   }, isPreview ? 0 : 2500);
 
-  // Config changes from CAM's settings browser (shared localStorage)
-  window.addEventListener("storage", e => { if (e.key === KEY) cfg = load(); });
+  window.addEventListener("storage", e => { if (e.key === KEY) { cfg = load(); view = null; } });
 })();
 </script>
 </body>
